@@ -1,0 +1,15 @@
+[package]
+name = "gnudbm"
+version = "0.1.0"
+authors = ["Colin Rofls <colin@cmyr.net>"]
+
+[dependencies]
+libc = "*"
+serde = "1.0"
+bincode = "1.0"
+
+[build-dependencies]
+bindgen = "0.26.3"
+
+[dev-dependencies]
+tempdir = "0.3.5"
