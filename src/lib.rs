@@ -117,7 +117,6 @@ impl<'a> Drop for Entry<'a> {
 
 impl Drop for Database {
     fn drop(&mut self) {
-        eprintln!("dropping database");
         unsafe { gdbm_sys::gdbm_close(self.handle) }
     }
 }
