@@ -143,7 +143,7 @@ impl GdbmOpener {
         //TODO: remove the unwrap and return an error if path contains
         //an interior null byte
         let path = CString::new(path.as_os_str().as_bytes())
-            .expect("Path should never contain interior null byte?");
+            .map_err(|_| "Path contained interior null byte".to_string())?;
         let path_ptr = path.as_ptr() as *mut i8;
 
         let mut flags = gdbm_sys::GDBM_WRITER as i32;
@@ -213,11 +213,29 @@ impl Database {
         let result = unsafe { gdbm_sys::gdbm_delete(self.handle, key.into()) };
         if result == 0 { Ok(()) } else { Err(()) }
     }
+
+    /// Returns the number of items in this database. This is not cached.
+    pub fn count(&self) -> Result<u64, String> {
+
+        let mut count = 0_u64;
+        let count_ptr: *mut u64 = &mut count;
+        let r = unsafe { gdbm_sys::gdbm_count(self.handle, count_ptr) };
+        if r == -1 {
+            Err(get_error())
+        } else {
+            Ok(count)
+        }
+    }
 }
 
 impl ReadOnlyDb {
     pub fn fetch(&self, key: &[u8]) -> Option<Entry> {
         self.0.fetch(key).ok()
+    }
+
+    /// Returns the number of items in this database. This is not cached.
+    pub fn count(&self) -> Result<u64, String> {
+        self.0.count()
     }
 }
 
@@ -284,11 +302,11 @@ mod tests {
         create_db(&db_path);
         assert!(db_path.exists());
 
-        let mut db = GdbmOpener::new()
+        let db = GdbmOpener::new()
             .open_readonly(&db_path)
             .expect("db read failed");
 
-        let mut db2 = GdbmOpener::new()
+        let db2 = GdbmOpener::new()
             .open_readonly(&db_path)
             .expect("db 2nd read failed");
     }
@@ -310,7 +328,7 @@ mod tests {
         }
         {
             assert!(db_path.exists());
-            let mut db = GdbmOpener::new()
+            let db = GdbmOpener::new()
                 .open_readonly(&db_path)
                 .expect("db open failed");
 
@@ -334,13 +352,35 @@ mod tests {
         }
 
         // ::New should overwrite the database
-        let mut db = GdbmOpener::new()
+        let db = GdbmOpener::new()
             .overwrite(true)
             .open(&db_path)
             .expect("db new failed");
 
         let r = db.fetch("write key".as_bytes());
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn count() {
+        let dir = TempDir::new("rust_gdbm").unwrap();
+        let db_path = dir.path().join("count.db");
+        let mut db = GdbmOpener::new()
+            .create_if_needed(true)
+            .open(&db_path)
+            .expect("open for count failed");
+
+        assert_eq!(db.count(), Ok(0));
+        for i in 0..5 {
+            db.store(format!("key {}", i).as_bytes(), &format!("value {}", i))
+                .unwrap();
+        }
+        assert_eq!(db.count(), Ok(5));
+        for i in 5..10 {
+            db.store(format!("key {}", i).as_bytes(), &format!("value {}", i))
+                .unwrap();
+        }
+        assert_eq!(db.count(), Ok(10));
     }
 }
 
