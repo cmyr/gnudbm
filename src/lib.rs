@@ -27,6 +27,9 @@ extern crate serde;
 extern crate bincode;
 #[cfg(test)]
 extern crate tempdir;
+#[cfg(test)]
+#[macro_use]
+extern crate serde_derive;
 
 mod gdbm_sys;
 
@@ -36,7 +39,6 @@ use std::path::Path;
 use std::slice;
 use std::ffi::{CString, CStr};
 use std::os::unix::ffi::OsStrExt;
-
 
 use serde::{Serialize, Deserialize};
 use serde::de::DeserializeOwned;
@@ -61,6 +63,44 @@ pub struct GdbmOpener {
 pub struct Entry<'a> {
     datum: gdbm_sys::datum,
     slice: &'a [u8],
+}
+
+pub struct Key<'a>(Entry<'a>);
+
+pub struct Iter<'a> {
+    db: &'a Database,
+    nxt_key: Option<gdbm_sys::datum>,
+}
+
+impl<'a> Iter<'a> {
+    fn new(db: &'a Database) -> Self {
+        let firstkey = unsafe { gdbm_sys::gdbm_firstkey(db.handle) };
+        let nxt_key = if firstkey.dptr.is_null() { None } else { Some(firstkey) };
+        Iter { db, nxt_key }
+    }
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = (Key<'a>, Entry<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(d) = self.nxt_key.take() {
+            let value_d = unsafe { gdbm_sys::gdbm_fetch(self.db.handle, d) };
+            let nxt = unsafe { gdbm_sys::gdbm_nextkey(self.db.handle, d) };
+            //TODO: check this error :{
+            if value_d.dptr.is_null() {
+                return None
+            }
+            if !nxt.dptr.is_null() {
+                self.nxt_key = Some(nxt);
+            } else {
+                //TODO? how do we want to handle errors in the iterator?
+            }
+            Some((Key(Entry::new(d)), Entry::new(value_d)))
+        } else {
+            None
+        }
+    }
 }
 
 impl<'a> Entry<'a> {
@@ -89,6 +129,12 @@ impl<'a> Entry<'a> {
     }
 }
 
+impl<'a> Key<'a> {
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.slice
+    }
+}
+
 impl<'a> Drop for Entry<'a> {
     fn drop(&mut self) {
         unsafe { libc::free(self.datum.dptr as *mut libc::c_void); }
@@ -98,6 +144,14 @@ impl<'a> Drop for Entry<'a> {
 impl Drop for Database {
     fn drop(&mut self) {
         unsafe { gdbm_sys::gdbm_close(self.handle) }
+    }
+}
+
+impl<'a> Drop for Iter<'a> {
+    fn drop(&mut self) {
+        if let Some(datum) = self.nxt_key {
+            unsafe { libc::free(datum.dptr as *mut libc::c_void); }
+        }
     }
 }
 
@@ -226,6 +280,10 @@ impl Database {
             Ok(count)
         }
     }
+
+    pub fn iter<'a>(&'a self) -> Iter<'a> {
+        Iter::new(self)
+    }
 }
 
 impl ReadOnlyDb {
@@ -236,6 +294,10 @@ impl ReadOnlyDb {
     /// Returns the number of items in this database. This is not cached.
     pub fn count(&self) -> Result<u64, String> {
         self.0.count()
+    }
+
+    pub fn iter<'a>(&'a self) -> Iter<'a> {
+        self.0.iter()
     }
 }
 
@@ -268,23 +330,21 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    fn create_db(path: &Path) {
+    fn create_db(path: &Path) -> Database {
         assert!(!path.exists());
-        GdbmOpener::new()
+        let db = GdbmOpener::new()
             .create_if_needed(true)
             .open(&path)
             .expect("db creation failed");
         assert!(path.exists());
+        db
     }
 
     #[test]
     fn smoke_test() {
         let dir = TempDir::new("rust_gdbm").unwrap();
         let db_path = dir.path().join("create.db");
-        let mut db = GdbmOpener::new()
-            .create_if_needed(true)
-            .open(&db_path)
-            .expect("db creation failed");
+        let mut db = create_db(&db_path);
         assert!(db_path.exists());
 
         db.store("my key".as_bytes(), "my value").unwrap();
@@ -365,10 +425,7 @@ mod tests {
     fn count() {
         let dir = TempDir::new("rust_gdbm").unwrap();
         let db_path = dir.path().join("count.db");
-        let mut db = GdbmOpener::new()
-            .create_if_needed(true)
-            .open(&db_path)
-            .expect("open for count failed");
+        let mut db = create_db(&db_path);
 
         assert_eq!(db.count(), Ok(0));
         for i in 0..5 {
@@ -381,6 +438,71 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(db.count(), Ok(10));
+    }
+
+    #[test]
+    fn entry() {
+        let dir = TempDir::new("rust_gdbm").unwrap();
+        let db_path = dir.path().join("entry.db");
+        let mut db = create_db(&db_path);
+        // serialize some standard types
+        db.store("an int".as_bytes(), &6usize).unwrap();
+        {
+            let entry = db.fetch("an int".as_bytes()).unwrap();
+            let s: usize = entry.as_type().unwrap();
+            assert_eq!(6, s);
+        }
+
+        let v = vec![4, 2, 0];
+        db.store("a vec".as_bytes(), &v).unwrap();
+        {
+            let entry = db.fetch("a vec".as_bytes()).unwrap();
+            let s: Vec<i32> = entry.into_type().unwrap();
+            assert_eq!(s, v);
+
+        }
+
+        #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+        struct MyStruct<'a> {
+            name: &'a str,
+            count: usize,
+            maybe: Option<bool>,
+        }
+
+        let n = "me".to_string();
+        let s = MyStruct {
+            name: &n,
+            count: 808,
+            maybe: None,
+        };
+
+        db.store("a struct".as_bytes(), &s).unwrap();
+        let entry = db.fetch("a struct".as_bytes()).unwrap();
+        let r: MyStruct = entry.as_type().unwrap();
+        assert_eq!(r, s);
+    }
+
+    #[test]
+    fn test_iter() {
+
+        let dir = TempDir::new("rust_gdbm").unwrap();
+        let db_path = dir.path().join("iter.db");
+        let mut db = create_db(&db_path);
+
+        for i in 0..5 {
+            //TODO: figure out why this crashes if i is an i32
+            db.store(&vec![i as u8], &i)
+                .unwrap();
+        }
+
+        {
+            let mut iter = db.iter();
+            assert_eq!(5, iter.count());
+        }
+
+        let mut iter = db.iter();
+        let sum = iter.fold(0, |acc, (_,ent)| acc + ent.as_type::<i32>().unwrap());
+        assert_eq!(sum, (0..5).sum());
     }
 }
 
