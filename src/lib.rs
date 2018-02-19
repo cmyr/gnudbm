@@ -281,6 +281,8 @@ impl Database {
     pub fn fetch(&self, key: &[u8]) -> GdbmResult<Entry> {
         let key_d: gdbm_sys::datum = key.into();
         let result = unsafe { gdbm_sys::gdbm_fetch(self.handle, key_d) };
+        // memory will be cleaned up in Entry::drop
+        let _ = Entry::new(key_d);
 
         if result.dptr.is_null() {
             Err(GdbmError::from_last().into())
@@ -317,6 +319,9 @@ impl Database {
     pub fn contains_key(&self, key: &[u8]) -> GdbmResult<bool> {
         let key_d: gdbm_sys::datum = key.into();
         let result = unsafe { gdbm_sys::gdbm_exists(self.handle, key_d) };
+        // memory will be cleaned up in Entry::drop
+        let _ = Entry::new(key_d);
+
         if result == 0 {
             let errno = last_errno();
             if errno != gdbm_sys::GDBM_NO_ERROR {
