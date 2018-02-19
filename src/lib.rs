@@ -46,6 +46,9 @@ use serde::de::DeserializeOwned;
 
 use error::{Error, GdbmError, GdbmResult, last_errno};
 
+//TODO: use umask
+const DEFAULT_MODE: i32 = 0o666;
+
 #[derive(Debug)]
 pub struct Database {
     handle: gdbm_sys::GDBM_FILE,
@@ -78,162 +81,6 @@ pub struct Key<'a>(Entry<'a>);
 pub struct Iter<'a> {
     db: &'a Database,
     nxt_key: Option<gdbm_sys::datum>,
-}
-
-impl<'a> Iter<'a> {
-    fn new(db: &'a Database) -> Self {
-        let firstkey = unsafe { gdbm_sys::gdbm_firstkey(db.handle) };
-        let nxt_key = if firstkey.dptr.is_null() { None } else { Some(firstkey) };
-        Iter { db, nxt_key }
-    }
-}
-
-impl<'a> Iterator for Iter<'a> {
-    type Item = (Key<'a>, Entry<'a>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(d) = self.nxt_key.take() {
-            let value_d = unsafe { gdbm_sys::gdbm_fetch(self.db.handle, d) };
-            let nxt = unsafe { gdbm_sys::gdbm_nextkey(self.db.handle, d) };
-            //TODO: check this error :{
-            if value_d.dptr.is_null() {
-                return None
-            }
-            if !nxt.dptr.is_null() {
-                self.nxt_key = Some(nxt);
-            } else {
-                //TODO? how do we want to handle errors in the iterator?
-            }
-            Some((Key(Entry::new(d)), Entry::new(value_d)))
-        } else {
-            None
-        }
-    }
-}
-
-impl<'a> Entry<'a> {
-    pub fn new(datum: gdbm_sys::datum) -> Self {
-        let slice = unsafe {
-            slice::from_raw_parts(datum.dptr as *const u8,
-                                  datum.dsize as usize)
-        };
-        Entry { datum, slice }
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        self.slice
-    }
-
-    pub fn as_type<'de, T>(&'de self) -> Result<T, bincode::Error>
-        where T: Deserialize<'de>
-    {
-        bincode::deserialize(self.slice)
-    }
-
-    //TODO: remove this
-    pub fn into_type<T>(self) -> Result<T, bincode::Error>
-        where T: DeserializeOwned
-    {
-        bincode::deserialize(self.slice)
-    }
-}
-
-impl<'a> Key<'a> {
-    pub fn as_bytes(&self) -> &[u8] {
-        self.0.slice
-    }
-}
-
-impl<'a> Drop for Entry<'a> {
-    fn drop(&mut self) {
-        unsafe { libc::free(self.datum.dptr as *mut libc::c_void); }
-    }
-}
-
-impl Drop for Database {
-    fn drop(&mut self) {
-        unsafe { gdbm_sys::gdbm_close(self.handle) }
-    }
-}
-
-impl<'a> Drop for Iter<'a> {
-    fn drop(&mut self) {
-        if let Some(datum) = self.nxt_key {
-            unsafe { libc::free(datum.dptr as *mut libc::c_void); }
-        }
-    }
-}
-
-impl GdbmOpener {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn create_if_needed(&mut self, create: bool) -> &mut Self {
-        self.create = create; self
-    }
-
-    pub fn overwrite(&mut self, overwrite: bool) -> &mut Self {
-        self.overwrite = overwrite; self
-    }
-
-    pub fn sync(&mut self, sync: bool) -> &mut Self {
-        self.sync = sync; self
-    }
-
-    pub fn no_lock(&mut self, no_lock: bool) -> &mut Self {
-        self.no_lock = no_lock; self
-    }
-
-    pub fn no_mmap(&mut self, no_mmap: bool) -> &mut Self {
-        self.no_mmap = no_mmap; self
-    }
-
-    pub fn open<P: AsRef<Path>>(&self, path: P) -> GdbmResult<Database> {
-        let path = path.as_ref();
-        let handle = self.gdbm_open(&path)?;
-        Ok(Database { handle })
-    }
-
-    pub fn open_readonly<P: AsRef<Path>>(&mut self, path: P)
-        -> GdbmResult<ReadOnlyDb> {
-        self.readonly = true;
-        let db = self.open(path)?;
-        Ok(ReadOnlyDb(db))
-    }
-
-    fn gdbm_open(&self, path: &Path) -> GdbmResult<gdbm_sys::GDBM_FILE> {
-        let path = CString::new(path.as_os_str().as_bytes())?;
-        let path_ptr = path.as_ptr() as *mut i8;
-
-        let mut flags = gdbm_sys::GDBM_WRITER as i32;
-        if self.readonly {
-            flags = gdbm_sys::GDBM_READER as i32;
-        } else if self.overwrite {
-            flags = gdbm_sys::GDBM_NEWDB as i32;
-        } else if self.create {
-            flags = gdbm_sys::GDBM_WRCREAT as i32;
-        }
-
-        if self.sync { flags |= gdbm_sys::GDBM_SYNC as i32 }
-        if self.no_lock { flags |= gdbm_sys::GDBM_NOLOCK as i32 }
-        if self.no_mmap { flags |= gdbm_sys::GDBM_NOMMAP as i32 }
-
-        eprintln!("opening with mode {}", flags);
-        let handle = unsafe {
-            gdbm_sys::gdbm_open(path_ptr,
-                                self.block_size,
-                                flags,
-                                DEFAULT_MODE,
-                                None)
-        };
-
-        if handle.is_null() {
-            Err(GdbmError::from_last().into())
-        } else {
-            Ok(handle)
-        }
-    }
 }
 
 impl Database {
@@ -352,6 +199,13 @@ impl Database {
     //TODO: fdesc? do we want to expose the file descriptor for locking?
 }
 
+
+impl Drop for Database {
+    fn drop(&mut self) {
+        unsafe { gdbm_sys::gdbm_close(self.handle) }
+    }
+}
+
 impl ReadOnlyDb {
     pub fn fetch(&self, key: &[u8]) -> GdbmResult<Entry> {
         self.0.fetch(key)
@@ -367,18 +221,151 @@ impl ReadOnlyDb {
     }
 }
 
-//TODO: move me into sys_gdbm
-impl<'a> From<&'a [u8]> for gdbm_sys::datum {
-    fn from(src: &'a [u8]) -> gdbm_sys::datum {
-        gdbm_sys::datum {
-            dptr: src.as_ptr() as *mut i8,
-            dsize: src.len() as i32,
+impl GdbmOpener {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn create_if_needed(&mut self, create: bool) -> &mut Self {
+        self.create = create; self
+    }
+
+    pub fn overwrite(&mut self, overwrite: bool) -> &mut Self {
+        self.overwrite = overwrite; self
+    }
+
+    pub fn sync(&mut self, sync: bool) -> &mut Self {
+        self.sync = sync; self
+    }
+
+    pub fn no_lock(&mut self, no_lock: bool) -> &mut Self {
+        self.no_lock = no_lock; self
+    }
+
+    pub fn no_mmap(&mut self, no_mmap: bool) -> &mut Self {
+        self.no_mmap = no_mmap; self
+    }
+
+    pub fn open<P: AsRef<Path>>(&self, path: P) -> GdbmResult<Database> {
+        let path = path.as_ref();
+        let handle = self.gdbm_open(&path)?;
+        Ok(Database { handle })
+    }
+
+    pub fn open_readonly<P: AsRef<Path>>(&mut self, path: P)
+        -> GdbmResult<ReadOnlyDb> {
+        self.readonly = true;
+        let db = self.open(path)?;
+        Ok(ReadOnlyDb(db))
+    }
+
+    fn gdbm_open(&self, path: &Path) -> GdbmResult<gdbm_sys::GDBM_FILE> {
+        let path = CString::new(path.as_os_str().as_bytes())?;
+        let path_ptr = path.as_ptr() as *mut i8;
+
+        let mut flags = gdbm_sys::GDBM_WRITER as i32;
+        if self.readonly {
+            flags = gdbm_sys::GDBM_READER as i32;
+        } else if self.overwrite {
+            flags = gdbm_sys::GDBM_NEWDB as i32;
+        } else if self.create {
+            flags = gdbm_sys::GDBM_WRCREAT as i32;
+        }
+
+        if self.sync { flags |= gdbm_sys::GDBM_SYNC as i32 }
+        if self.no_lock { flags |= gdbm_sys::GDBM_NOLOCK as i32 }
+        if self.no_mmap { flags |= gdbm_sys::GDBM_NOMMAP as i32 }
+
+        eprintln!("opening with mode {}", flags);
+        let handle = unsafe {
+            gdbm_sys::gdbm_open(path_ptr,
+                                self.block_size,
+                                flags,
+                                DEFAULT_MODE,
+                                None)
+        };
+
+        if handle.is_null() {
+            Err(GdbmError::from_last().into())
+        } else {
+            Ok(handle)
         }
     }
 }
 
-//TODO: use umask
-const DEFAULT_MODE: i32 = 0o666;
+
+impl<'a> Entry<'a> {
+    pub fn new(datum: gdbm_sys::datum) -> Self {
+        let slice = unsafe {
+            slice::from_raw_parts(datum.dptr as *const u8,
+                                  datum.dsize as usize)
+        };
+        Entry { datum, slice }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.slice
+    }
+
+    pub fn as_type<'de, T>(&'de self) -> Result<T, bincode::Error>
+        where T: Deserialize<'de>
+    {
+        bincode::deserialize(self.slice)
+    }
+
+    //TODO: remove this
+    pub fn into_type<T>(self) -> Result<T, bincode::Error>
+        where T: DeserializeOwned
+    {
+        bincode::deserialize(self.slice)
+    }
+}
+
+impl<'a> Key<'a> {
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.slice
+    }
+}
+
+
+impl<'a> Iter<'a> {
+    fn new(db: &'a Database) -> Self {
+        let firstkey = unsafe { gdbm_sys::gdbm_firstkey(db.handle) };
+        let nxt_key = if firstkey.dptr.is_null() { None } else { Some(firstkey) };
+        Iter { db, nxt_key }
+    }
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = (Key<'a>, Entry<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(d) = self.nxt_key.take() {
+            let value_d = unsafe { gdbm_sys::gdbm_fetch(self.db.handle, d) };
+            let nxt = unsafe { gdbm_sys::gdbm_nextkey(self.db.handle, d) };
+            //TODO: check this error :{
+            if value_d.dptr.is_null() {
+                return None
+            }
+            if !nxt.dptr.is_null() {
+                self.nxt_key = Some(nxt);
+            } else {
+                //TODO? how do we want to handle errors in the iterator?
+            }
+            Some((Key(Entry::new(d)), Entry::new(value_d)))
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> Drop for Iter<'a> {
+    fn drop(&mut self) {
+        if let Some(datum) = self.nxt_key {
+            unsafe { libc::free(datum.dptr as *mut libc::c_void); }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

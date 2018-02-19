@@ -29,6 +29,17 @@
 
 include!(concat!(env!("OUT_DIR"), "/gdbm_bindings.rs"));
 
+//TODO: impl drop for datum; requires some fiddling with bindgen
+
+impl<'a> From<&'a [u8]> for datum {
+    fn from(src: &'a [u8]) -> datum {
+        datum {
+            dptr: src.as_ptr() as *mut i8,
+            dsize: src.len() as i32,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test_bindings {
     use super::*;
