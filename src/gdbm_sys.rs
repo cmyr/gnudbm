@@ -51,8 +51,7 @@ mod test_bindings {
     fn multi_reader() {
         let dir = TempDir::new("gdbm_sys").unwrap();
         let db_path = dir.path().join("test.db");
-        let path = CString::new(db_path.as_os_str().as_bytes())
-            .unwrap();
+        let path = CString::new(db_path.as_os_str().as_bytes()).unwrap();
         let path_ptr = path.as_ptr() as *mut i8;
 
         // create db

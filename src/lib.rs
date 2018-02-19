@@ -22,14 +22,14 @@
 // IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+extern crate bincode;
 extern crate libc;
 extern crate serde;
-extern crate bincode;
-#[cfg(test)]
-extern crate tempdir;
 #[cfg(test)]
 #[macro_use]
 extern crate serde_derive;
+#[cfg(test)]
+extern crate tempdir;
 
 mod gdbm_sys;
 mod error;
@@ -41,10 +41,10 @@ use std::slice;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 
-use error::{Error, GdbmError, GdbmResult, last_errno};
+use error::{last_errno, Error, GdbmError, GdbmResult};
 
 //TODO: use umask
 const DEFAULT_MODE: i32 = 0o666;
@@ -85,13 +85,15 @@ pub struct Iter<'a> {
 
 impl Database {
     pub fn store<T>(&mut self, key: &[u8], value: &T) -> GdbmResult<()>
-        where T: ?Sized + Serialize
+    where
+        T: ?Sized + Serialize,
     {
         self.store_impl(key, value, true).map(|_| ())
     }
 
     pub fn store_safe<T>(&mut self, key: &[u8], value: &T) -> GdbmResult<()>
-        where T: ?Sized + Serialize
+    where
+        T: ?Sized + Serialize,
     {
         let r = self.store_impl(key, value, false)?;
         if r == 1 {
@@ -102,7 +104,8 @@ impl Database {
     }
 
     fn store_impl<T>(&mut self, key: &[u8], value: &T, replace: bool) -> GdbmResult<i32>
-        where T: ?Sized + Serialize
+    where
+        T: ?Sized + Serialize,
     {
         let bytes = bincode::serialize(value)?;
         let key_d: gdbm_sys::datum = key.into();
@@ -112,11 +115,13 @@ impl Database {
             dsize: bytes.len() as i32,
         };
 
-        let flag = if replace { gdbm_sys::GDBM_REPLACE } else { gdbm_sys::GDBM_INSERT };
-
-        let result = unsafe {
-            gdbm_sys::gdbm_store(self.handle, key_d, value_d, flag as i32)
+        let flag = if replace {
+            gdbm_sys::GDBM_REPLACE
+        } else {
+            gdbm_sys::GDBM_INSERT
         };
+
+        let result = unsafe { gdbm_sys::gdbm_store(self.handle, key_d, value_d, flag as i32) };
 
         if result == -1 {
             Err(GdbmError::from_last().into())
@@ -199,7 +204,6 @@ impl Database {
     //TODO: fdesc? do we want to expose the file descriptor for locking?
 }
 
-
 impl Drop for Database {
     fn drop(&mut self) {
         unsafe { gdbm_sys::gdbm_close(self.handle) }
@@ -227,23 +231,28 @@ impl GdbmOpener {
     }
 
     pub fn create_if_needed(&mut self, create: bool) -> &mut Self {
-        self.create = create; self
+        self.create = create;
+        self
     }
 
     pub fn overwrite(&mut self, overwrite: bool) -> &mut Self {
-        self.overwrite = overwrite; self
+        self.overwrite = overwrite;
+        self
     }
 
     pub fn sync(&mut self, sync: bool) -> &mut Self {
-        self.sync = sync; self
+        self.sync = sync;
+        self
     }
 
     pub fn no_lock(&mut self, no_lock: bool) -> &mut Self {
-        self.no_lock = no_lock; self
+        self.no_lock = no_lock;
+        self
     }
 
     pub fn no_mmap(&mut self, no_mmap: bool) -> &mut Self {
-        self.no_mmap = no_mmap; self
+        self.no_mmap = no_mmap;
+        self
     }
 
     pub fn open<P: AsRef<Path>>(&self, path: P) -> GdbmResult<Database> {
@@ -252,8 +261,7 @@ impl GdbmOpener {
         Ok(Database { handle })
     }
 
-    pub fn open_readonly<P: AsRef<Path>>(&mut self, path: P)
-        -> GdbmResult<ReadOnlyDb> {
+    pub fn open_readonly<P: AsRef<Path>>(&mut self, path: P) -> GdbmResult<ReadOnlyDb> {
         self.readonly = true;
         let db = self.open(path)?;
         Ok(ReadOnlyDb(db))
@@ -272,18 +280,19 @@ impl GdbmOpener {
             flags = gdbm_sys::GDBM_WRCREAT as i32;
         }
 
-        if self.sync { flags |= gdbm_sys::GDBM_SYNC as i32 }
-        if self.no_lock { flags |= gdbm_sys::GDBM_NOLOCK as i32 }
-        if self.no_mmap { flags |= gdbm_sys::GDBM_NOMMAP as i32 }
+        if self.sync {
+            flags |= gdbm_sys::GDBM_SYNC as i32
+        }
+        if self.no_lock {
+            flags |= gdbm_sys::GDBM_NOLOCK as i32
+        }
+        if self.no_mmap {
+            flags |= gdbm_sys::GDBM_NOMMAP as i32
+        }
 
         eprintln!("opening with mode {}", flags);
-        let handle = unsafe {
-            gdbm_sys::gdbm_open(path_ptr,
-                                self.block_size,
-                                flags,
-                                DEFAULT_MODE,
-                                None)
-        };
+        let handle =
+            unsafe { gdbm_sys::gdbm_open(path_ptr, self.block_size, flags, DEFAULT_MODE, None) };
 
         if handle.is_null() {
             Err(GdbmError::from_last().into())
@@ -293,13 +302,9 @@ impl GdbmOpener {
     }
 }
 
-
 impl<'a> Entry<'a> {
     pub fn new(datum: gdbm_sys::datum) -> Self {
-        let slice = unsafe {
-            slice::from_raw_parts(datum.dptr as *const u8,
-                                  datum.dsize as usize)
-        };
+        let slice = unsafe { slice::from_raw_parts(datum.dptr as *const u8, datum.dsize as usize) };
         Entry { datum, slice }
     }
 
@@ -308,14 +313,16 @@ impl<'a> Entry<'a> {
     }
 
     pub fn as_type<'de, T>(&'de self) -> Result<T, bincode::Error>
-        where T: Deserialize<'de>
+    where
+        T: Deserialize<'de>,
     {
         bincode::deserialize(self.slice)
     }
 
     //TODO: remove this
     pub fn into_type<T>(self) -> Result<T, bincode::Error>
-        where T: DeserializeOwned
+    where
+        T: DeserializeOwned,
     {
         bincode::deserialize(self.slice)
     }
@@ -327,11 +334,14 @@ impl<'a> Key<'a> {
     }
 }
 
-
 impl<'a> Iter<'a> {
     fn new(db: &'a Database) -> Self {
         let firstkey = unsafe { gdbm_sys::gdbm_firstkey(db.handle) };
-        let nxt_key = if firstkey.dptr.is_null() { None } else { Some(firstkey) };
+        let nxt_key = if firstkey.dptr.is_null() {
+            None
+        } else {
+            Some(firstkey)
+        };
         Iter { db, nxt_key }
     }
 }
@@ -345,7 +355,7 @@ impl<'a> Iterator for Iter<'a> {
             let nxt = unsafe { gdbm_sys::gdbm_nextkey(self.db.handle, d) };
             //TODO: check this error :{
             if value_d.dptr.is_null() {
-                return None
+                return None;
             }
             if !nxt.dptr.is_null() {
                 self.nxt_key = Some(nxt);
@@ -362,7 +372,9 @@ impl<'a> Iterator for Iter<'a> {
 impl<'a> Drop for Iter<'a> {
     fn drop(&mut self) {
         if let Some(datum) = self.nxt_key {
-            unsafe { libc::free(datum.dptr as *mut libc::c_void); }
+            unsafe {
+                libc::free(datum.dptr as *mut libc::c_void);
+            }
         }
     }
 }
@@ -415,7 +427,6 @@ mod tests {
 
     #[test]
     fn test_modes() {
-
         let dir = TempDir::new("rust_gdbm").unwrap();
         let db_path = dir.path().join("read.db");
         assert!(!db_path.exists());
@@ -501,7 +512,6 @@ mod tests {
             let entry = db.fetch("a vec".as_bytes()).unwrap();
             let s: Vec<i32> = entry.into_type().unwrap();
             assert_eq!(s, v);
-
         }
 
         #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -526,15 +536,13 @@ mod tests {
 
     #[test]
     fn test_iter() {
-
         let dir = TempDir::new("rust_gdbm").unwrap();
         let db_path = dir.path().join("iter.db");
         let mut db = create_db(&db_path);
 
         for i in 0..5 {
             //TODO: figure out why this crashes if i is an i32
-            db.store(&vec![i as u8], &i)
-                .unwrap();
+            db.store(&vec![i as u8], &i).unwrap();
         }
 
         {
@@ -543,7 +551,7 @@ mod tests {
         }
 
         let iter = db.iter();
-        let sum = iter.fold(0, |acc, (_,ent)| acc + ent.as_type::<i32>().unwrap());
+        let sum = iter.fold(0, |acc, (_, ent)| acc + ent.as_type::<i32>().unwrap());
         assert_eq!(sum, (0..5).sum());
     }
 
@@ -565,4 +573,3 @@ mod tests {
         assert!(db.contains_key("key 2".as_bytes()).unwrap());
     }
 }
-

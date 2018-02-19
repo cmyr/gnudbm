@@ -35,7 +35,7 @@ type ErrorCode = u32;
 /// An error originating in the gdbm C library.
 #[derive(Debug)]
 pub enum GdbmError {
-	/// The file was not a valid database.
+    /// The file was not a valid database.
     InvalidDatabase,
     /// Database is in inconsistent state and needs recovery.
     NeedsRecovery,
@@ -74,24 +74,21 @@ impl GdbmError {
 impl Error {
     /// Returns the last error reported by gdbm in the current thread.
     pub fn from_last() -> Self {
-            last_errno().into()
+        last_errno().into()
     }
 }
 
 impl fmt::Display for GdbmError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            GdbmError::InvalidDatabase =>
-                write!(f, "The file is not a valid database"),
-            GdbmError::NeedsRecovery =>
-                write!(f, "The database is corrupted"),
-            GdbmError::UnexpectedEOF =>
-                write!(f, "Unexpected EOF in database"),
+            GdbmError::InvalidDatabase => write!(f, "The file is not a valid database"),
+            GdbmError::NeedsRecovery => write!(f, "The database is corrupted"),
+            GdbmError::UnexpectedEOF => write!(f, "Unexpected EOF in database"),
             GdbmError::Other(code) => unsafe {
-                let err_ptr =gdbm_sys::gdbm_strerror(code as i32);
+                let err_ptr = gdbm_sys::gdbm_strerror(code as i32);
                 let err_string = CStr::from_ptr(err_ptr);
                 write!(f, "{}", err_string.to_string_lossy())
-            }
+            },
         }
     }
 }
@@ -99,16 +96,11 @@ impl fmt::Display for GdbmError {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Error::Internal(ref e) =>
-                e.fmt(f),
-            Error::InvalidPath =>
-                write!(f, "Invalid path (interior null byte)"),
-            Error::KeyExists =>
-                write!(f, "key already exists in database"),
-            Error::NoRecord =>
-                write!(f, "key does not exist in database"),
-            Error::Bincode(ref e) =>
-                e.fmt(f)
+            Error::Internal(ref e) => e.fmt(f),
+            Error::InvalidPath => write!(f, "Invalid path (interior null byte)"),
+            Error::KeyExists => write!(f, "key already exists in database"),
+            Error::NoRecord => write!(f, "key does not exist in database"),
+            Error::Bincode(ref e) => e.fmt(f),
         }
     }
 }
@@ -116,24 +108,18 @@ impl fmt::Display for Error {
 impl From<u32> for Error {
     fn from(src: u32) -> Error {
         match src {
-            errno if errno == gdbm_sys::GDBM_ITEM_NOT_FOUND =>
-                Error::NoRecord,
-            errno =>
-                Error::Internal(errno.into()),
+            errno if errno == gdbm_sys::GDBM_ITEM_NOT_FOUND => Error::NoRecord,
+            errno => Error::Internal(errno.into()),
         }
     }
 }
 
-
 impl From<u32> for GdbmError {
     fn from(src: u32) -> GdbmError {
         match src {
-            errno if errno == gdbm_sys::GDBM_EMPTY_DATABASE =>
-                GdbmError::InvalidDatabase,
-            errno if errno == gdbm_sys::GDBM_NEED_RECOVERY =>
-                GdbmError::NeedsRecovery,
-            other =>
-                GdbmError::Other(other),
+            errno if errno == gdbm_sys::GDBM_EMPTY_DATABASE => GdbmError::InvalidDatabase,
+            errno if errno == gdbm_sys::GDBM_NEED_RECOVERY => GdbmError::NeedsRecovery,
+            other => GdbmError::Other(other),
         }
     }
 }
@@ -155,7 +141,6 @@ impl From<BincodeError> for Error {
         Error::Bincode(src)
     }
 }
-
 
 pub fn last_errno() -> u32 {
     unsafe {
