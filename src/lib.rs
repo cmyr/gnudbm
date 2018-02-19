@@ -45,36 +45,16 @@ pub struct Database {
     handle: gdbm_sys::GDBM_FILE,
 }
 
-#[derive(Debug)]
-pub enum OpenMode {
-    /// Open the database for reading only.
-    ReadOnly,
-    /// Open the database for reading and writing.
-    Write,
-    /// Open the database for reading and writing, creating a new database
-    /// if one does not exist.
-    Create,
-    /// Create a new database, replacing any existing file.
-    New,
-}
-
-impl OpenMode {
-    pub fn raw(&self) -> i32 {
-        match *self {
-            OpenMode::ReadOnly => gdbm_sys::GDBM_READER as i32,
-            OpenMode::Write => gdbm_sys::GDBM_WRITER as i32,
-            OpenMode::Create => gdbm_sys::GDBM_WRCREAT as i32,
-            OpenMode::New => gdbm_sys::GDBM_NEWDB as i32,
-        }
-    }
-}
+pub struct ReadOnlyDb(Database);
 
 #[derive(Debug, Default)]
 pub struct GdbmOpener {
-    mode: OpenMode,
     sync: bool,
     no_lock: bool,
     no_mmap: bool,
+    create: bool,
+    overwrite: bool,
+    readonly: bool,
     block_size: i32,
 }
 
@@ -121,20 +101,17 @@ impl Drop for Database {
     }
 }
 
-impl Default for OpenMode {
-    fn default() -> Self { OpenMode::ReadOnly }
-}
-
-
 impl GdbmOpener {
     pub fn new() -> Self {
         Self::default()
     }
 
-    //TODO: maybe have a separate db type for the readonly case, and then have
-    //'create if missing' and 'overwrite existing' be part of the builder?
-    pub fn mode(&mut self, mode: OpenMode) -> &mut Self {
-        self.mode = mode; self
+    pub fn create_if_needed(&mut self, create: bool) -> &mut Self {
+        self.create = create; self
+    }
+
+    pub fn overwrite(&mut self, overwrite: bool) -> &mut Self {
+        self.overwrite = overwrite; self
     }
 
     pub fn sync(&mut self, sync: bool) -> &mut Self {
@@ -150,13 +127,34 @@ impl GdbmOpener {
     }
 
     pub fn open<P: AsRef<Path>>(&self, path: P) -> Result<Database, String> {
+        let path = path.as_ref();
+        let handle = self.gdbm_open(&path)?;
+        Ok(Database { handle })
+    }
+
+    pub fn open_readonly<P: AsRef<Path>>(&mut self, path: P)
+        -> Result<ReadOnlyDb, String> {
+        self.readonly = true;
+        let db = self.open(path)?;
+        Ok(ReadOnlyDb(db))
+    }
+
+    fn gdbm_open(&self, path: &Path) -> Result<gdbm_sys::GDBM_FILE, String> {
         //TODO: remove the unwrap and return an error if path contains
         //an interior null byte
-        let path = CString::new(path.as_ref().as_os_str().as_bytes())
+        let path = CString::new(path.as_os_str().as_bytes())
             .expect("Path should never contain interior null byte?");
         let path_ptr = path.as_ptr() as *mut i8;
 
-        let mut flags = self.mode.raw();
+        let mut flags = gdbm_sys::GDBM_WRITER as i32;
+        if self.readonly {
+            flags = gdbm_sys::GDBM_READER as i32;
+        } else if self.overwrite {
+            flags = gdbm_sys::GDBM_NEWDB as i32;
+        } else if self.create {
+            flags = gdbm_sys::GDBM_WRCREAT as i32;
+        }
+
         if self.sync { flags |= gdbm_sys::GDBM_SYNC as i32 }
         if self.no_lock { flags |= gdbm_sys::GDBM_NOLOCK as i32 }
         if self.no_mmap { flags |= gdbm_sys::GDBM_NOMMAP as i32 }
@@ -166,14 +164,14 @@ impl GdbmOpener {
             gdbm_sys::gdbm_open(path_ptr,
                                 self.block_size,
                                 flags,
-                                default_mode,
+                                DEFAULT_MODE,
                                 None)
         };
 
         if handle.is_null() {
             Err(get_error())
         } else {
-            Ok(Database { handle })
+            Ok(handle)
         }
     }
 }
@@ -217,6 +215,12 @@ impl Database {
     }
 }
 
+impl ReadOnlyDb {
+    pub fn fetch(&self, key: &[u8]) -> Option<Entry> {
+        self.0.fetch(key).ok()
+    }
+}
+
 impl<'a> From<&'a [u8]> for gdbm_sys::datum {
     fn from(src: &'a [u8]) -> gdbm_sys::datum {
         gdbm_sys::datum {
@@ -227,7 +231,7 @@ impl<'a> From<&'a [u8]> for gdbm_sys::datum {
 }
 
 //TODO: use umask
-const default_mode: i32 = 0o666;
+const DEFAULT_MODE: i32 = 0o666;
 
 fn get_error() -> String {
     unsafe {
@@ -249,7 +253,7 @@ mod tests {
     fn create_db(path: &Path) {
         assert!(!path.exists());
         GdbmOpener::new()
-            .mode(OpenMode::Create)
+            .create_if_needed(true)
             .open(&path)
             .expect("db creation failed");
         assert!(path.exists());
@@ -260,7 +264,7 @@ mod tests {
         let dir = TempDir::new("rust_gdbm").unwrap();
         let db_path = dir.path().join("create.db");
         let mut db = GdbmOpener::new()
-            .mode(OpenMode::Create)
+            .create_if_needed(true)
             .open(&db_path)
             .expect("db creation failed");
         assert!(db_path.exists());
@@ -274,19 +278,6 @@ mod tests {
     }
 
     #[test]
-    fn test_no_create() {
-        let dir = TempDir::new("rust_gdbm").unwrap();
-        {
-            let db_path = dir.path().join("nonexistent.db");
-            let db = GdbmOpener::new()
-                .mode(OpenMode::ReadOnly)
-                .open(&db_path);
-            assert!(db.is_err());
-
-        }
-    }
-
-    #[test]
     fn test_readonly() {
         let dir = TempDir::new("rust_gdbm").unwrap();
         let db_path = dir.path().join("readonly.db");
@@ -294,14 +285,11 @@ mod tests {
         assert!(db_path.exists());
 
         let mut db = GdbmOpener::new()
-            .mode(OpenMode::ReadOnly)
-            .open(&db_path)
+            .open_readonly(&db_path)
             .expect("db read failed");
-        assert!(db.store("read key".as_bytes(), "read value").is_err());
 
         let mut db2 = GdbmOpener::new()
-            .mode(OpenMode::ReadOnly)
-            .open(&db_path)
+            .open_readonly(&db_path)
             .expect("db 2nd read failed");
     }
 
@@ -314,7 +302,7 @@ mod tests {
 
         {
             let mut db = GdbmOpener::new()
-                .mode(OpenMode::Create)
+                .create_if_needed(true)
                 .open(&db_path)
                 .expect("db creation failed");
             db.store("read key".as_bytes(), "read value").unwrap();
@@ -323,8 +311,7 @@ mod tests {
         {
             assert!(db_path.exists());
             let mut db = GdbmOpener::new()
-                .mode(OpenMode::ReadOnly)
-                .open(&db_path)
+                .open_readonly(&db_path)
                 .expect("db open failed");
 
             {
@@ -332,12 +319,9 @@ mod tests {
                 let s: String = entry.as_type().unwrap();
                 assert_eq!(s, "read value");
             }
-             //store should fail
-            assert!(db.store("another key".as_bytes(), "another value").is_err());
         }
         {
             let mut db = GdbmOpener::new()
-                .mode(OpenMode::Write)
                 .open(&db_path)
                 .expect("db open for write failed");
 
@@ -351,7 +335,7 @@ mod tests {
 
         // ::New should overwrite the database
         let mut db = GdbmOpener::new()
-            .mode(OpenMode::New)
+            .overwrite(true)
             .open(&db_path)
             .expect("db new failed");
 
