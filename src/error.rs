@@ -67,18 +67,14 @@ pub type GdbmResult<T> = Result<T, Error>;
 impl GdbmError {
     /// Returns the last error reported by gdbm in the current thread.
     pub fn from_last() -> Self {
-        last_error()
+        last_errno().into()
     }
 }
 
 impl Error {
     /// Returns the last error reported by gdbm in the current thread.
     pub fn from_last() -> Self {
-        unsafe {
-            let err_loc = gdbm_sys::gdbm_errno_location();
-            let errno = *err_loc as u32;
-            errno.into()
-        }
+            last_errno().into()
     }
 }
 
@@ -161,9 +157,9 @@ impl From<BincodeError> for Error {
 }
 
 
-fn last_error() -> GdbmError {
+pub fn last_errno() -> u32 {
     unsafe {
         let err_loc = gdbm_sys::gdbm_errno_location();
-        (*err_loc as u32).into()
+        *err_loc as u32
     }
 }

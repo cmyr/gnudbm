@@ -44,7 +44,7 @@ use std::os::unix::ffi::OsStrExt;
 use serde::{Serialize, Deserialize};
 use serde::de::DeserializeOwned;
 
-use error::{Error, GdbmError, GdbmResult};
+use error::{Error, GdbmError, GdbmResult, last_errno};
 
 #[derive(Debug)]
 pub struct Database {
@@ -289,7 +289,7 @@ impl Database {
         }
     }
 
-    pub fn delete(&self, key: &[u8]) -> GdbmResult<()> {
+    pub fn remove(&self, key: &[u8]) -> GdbmResult<()> {
         let result = unsafe { gdbm_sys::gdbm_delete(self.handle, key.into()) };
         if result != 0 {
             Err(GdbmError::from_last().into())
@@ -313,6 +313,38 @@ impl Database {
     pub fn iter<'a>(&'a self) -> Iter<'a> {
         Iter::new(self)
     }
+
+    pub fn contains_key(&self, key: &[u8]) -> GdbmResult<bool> {
+        let key_d: gdbm_sys::datum = key.into();
+        let result = unsafe { gdbm_sys::gdbm_exists(self.handle, key_d) };
+        if result == 0 {
+            let errno = last_errno();
+            if errno != gdbm_sys::GDBM_NO_ERROR {
+                Err(errno.into())
+            } else {
+                Ok(false)
+            }
+        } else {
+            Ok(true)
+        }
+    }
+
+    pub fn flush(&self) {
+        //TODO: this should be failable, but docs don't show how we get the error :|
+        unsafe { gdbm_sys::gdbm_sync(self.handle) }
+    }
+
+    pub fn reorganize(&mut self) -> GdbmResult<()> {
+        let result = unsafe { gdbm_sys::gdbm_reorganize(self.handle) };
+        if result != 0 {
+            Err(Error::from_last())
+        } else {
+            Ok(())
+        }
+    }
+
+    //TODO: setopt (probably just one fn per option)
+    //TODO: fdesc? do we want to expose the file descriptor for locking?
 }
 
 impl ReadOnlyDb {
@@ -521,6 +553,24 @@ mod tests {
         let iter = db.iter();
         let sum = iter.fold(0, |acc, (_,ent)| acc + ent.as_type::<i32>().unwrap());
         assert_eq!(sum, (0..5).sum());
+    }
+
+    #[test]
+    fn contains_delete() {
+        let dir = TempDir::new("rust_gdbm").unwrap();
+        let db_path = dir.path().join("contains_del.db");
+        let mut db = create_db(&db_path);
+
+        for i in 0..5 {
+            db.store(format!("key {}", i).as_bytes(), &format!("value {}", i))
+                .unwrap();
+        }
+
+        assert!(db.contains_key("key 1".as_bytes()).unwrap());
+        assert!(!db.contains_key("key x".as_bytes()).unwrap());
+        db.remove("key 1".as_bytes()).unwrap();
+        assert!(!db.contains_key("key 1".as_bytes()).unwrap());
+        assert!(db.contains_key("key 2".as_bytes()).unwrap());
     }
 }
 
