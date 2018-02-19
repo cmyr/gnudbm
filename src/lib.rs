@@ -32,21 +32,26 @@ extern crate tempdir;
 extern crate serde_derive;
 
 mod gdbm_sys;
+mod error;
 
 use std::ops::Drop;
 use std::default::Default;
 use std::path::Path;
 use std::slice;
-use std::ffi::{CString, CStr};
+use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 
 use serde::{Serialize, Deserialize};
 use serde::de::DeserializeOwned;
 
+use error::{Error, GdbmError, GdbmResult};
+
+#[derive(Debug)]
 pub struct Database {
     handle: gdbm_sys::GDBM_FILE,
 }
 
+#[derive(Debug)]
 pub struct ReadOnlyDb(Database);
 
 #[derive(Debug, Default)]
@@ -60,13 +65,16 @@ pub struct GdbmOpener {
     block_size: i32,
 }
 
+#[derive(Debug)]
 pub struct Entry<'a> {
     datum: gdbm_sys::datum,
     slice: &'a [u8],
 }
 
+#[derive(Debug)]
 pub struct Key<'a>(Entry<'a>);
 
+#[derive(Debug)]
 pub struct Iter<'a> {
     db: &'a Database,
     nxt_key: Option<gdbm_sys::datum>,
@@ -122,6 +130,7 @@ impl<'a> Entry<'a> {
         bincode::deserialize(self.slice)
     }
 
+    //TODO: remove this
     pub fn into_type<T>(self) -> Result<T, bincode::Error>
         where T: DeserializeOwned
     {
@@ -180,24 +189,21 @@ impl GdbmOpener {
         self.no_mmap = no_mmap; self
     }
 
-    pub fn open<P: AsRef<Path>>(&self, path: P) -> Result<Database, String> {
+    pub fn open<P: AsRef<Path>>(&self, path: P) -> GdbmResult<Database> {
         let path = path.as_ref();
         let handle = self.gdbm_open(&path)?;
         Ok(Database { handle })
     }
 
     pub fn open_readonly<P: AsRef<Path>>(&mut self, path: P)
-        -> Result<ReadOnlyDb, String> {
+        -> GdbmResult<ReadOnlyDb> {
         self.readonly = true;
         let db = self.open(path)?;
         Ok(ReadOnlyDb(db))
     }
 
-    fn gdbm_open(&self, path: &Path) -> Result<gdbm_sys::GDBM_FILE, String> {
-        //TODO: remove the unwrap and return an error if path contains
-        //an interior null byte
-        let path = CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| "Path contained interior null byte".to_string())?;
+    fn gdbm_open(&self, path: &Path) -> GdbmResult<gdbm_sys::GDBM_FILE> {
+        let path = CString::new(path.as_os_str().as_bytes())?;
         let path_ptr = path.as_ptr() as *mut i8;
 
         let mut flags = gdbm_sys::GDBM_WRITER as i32;
@@ -223,7 +229,7 @@ impl GdbmOpener {
         };
 
         if handle.is_null() {
-            Err(get_error())
+            Err(GdbmError::from_last().into())
         } else {
             Ok(handle)
         }
@@ -231,11 +237,27 @@ impl GdbmOpener {
 }
 
 impl Database {
-    pub fn store<T>(&mut self, key: &[u8], value: &T) -> Result<(), ()>
+    pub fn store<T>(&mut self, key: &[u8], value: &T) -> GdbmResult<()>
         where T: ?Sized + Serialize
     {
-        let bytes = bincode::serialize(value).map_err(|_|())?;
+        self.store_impl(key, value, true).map(|_| ())
+    }
 
+    pub fn store_safe<T>(&mut self, key: &[u8], value: &T) -> GdbmResult<()>
+        where T: ?Sized + Serialize
+    {
+        let r = self.store_impl(key, value, false)?;
+        if r == 1 {
+            Err(Error::KeyExists)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn store_impl<T>(&mut self, key: &[u8], value: &T, replace: bool) -> GdbmResult<i32>
+        where T: ?Sized + Serialize
+    {
+        let bytes = bincode::serialize(value)?;
         let key_d: gdbm_sys::datum = key.into();
 
         let value_d = gdbm_sys::datum {
@@ -243,39 +265,46 @@ impl Database {
             dsize: bytes.len() as i32,
         };
 
-        //TODO: support for insertion with replacement
+        let flag = if replace { gdbm_sys::GDBM_REPLACE } else { gdbm_sys::GDBM_INSERT };
+
         let result = unsafe {
-            gdbm_sys::gdbm_store(self.handle, key_d, value_d, gdbm_sys::GDBM_INSERT as i32)
+            gdbm_sys::gdbm_store(self.handle, key_d, value_d, flag as i32)
         };
 
-        //TODO: check result, return some error type if needed
-        if result == 0 { Ok(()) } else { Err(()) }
+        if result == -1 {
+            Err(GdbmError::from_last().into())
+        } else {
+            Ok(result)
+        }
     }
 
-    pub fn fetch(&self, key: &[u8]) -> Result<Entry, ()> {
+    pub fn fetch(&self, key: &[u8]) -> GdbmResult<Entry> {
         let key_d: gdbm_sys::datum = key.into();
         let result = unsafe { gdbm_sys::gdbm_fetch(self.handle, key_d) };
 
         if result.dptr.is_null() {
-            Err(())
+            Err(GdbmError::from_last().into())
         } else {
             Ok(Entry::new(result))
         }
     }
 
-    pub fn delete(&self, key: &[u8]) -> Result<(), ()> {
+    pub fn delete(&self, key: &[u8]) -> GdbmResult<()> {
         let result = unsafe { gdbm_sys::gdbm_delete(self.handle, key.into()) };
-        if result == 0 { Ok(()) } else { Err(()) }
+        if result != 0 {
+            Err(GdbmError::from_last().into())
+        } else {
+            Ok(())
+        }
     }
 
     /// Returns the number of items in this database. This is not cached.
-    pub fn count(&self) -> Result<u64, String> {
-
+    pub fn count(&self) -> GdbmResult<u64> {
         let mut count = 0_u64;
         let count_ptr: *mut u64 = &mut count;
         let r = unsafe { gdbm_sys::gdbm_count(self.handle, count_ptr) };
         if r == -1 {
-            Err(get_error())
+            Err(GdbmError::from_last().into())
         } else {
             Ok(count)
         }
@@ -287,12 +316,12 @@ impl Database {
 }
 
 impl ReadOnlyDb {
-    pub fn fetch(&self, key: &[u8]) -> Option<Entry> {
-        self.0.fetch(key).ok()
+    pub fn fetch(&self, key: &[u8]) -> GdbmResult<Entry> {
+        self.0.fetch(key)
     }
 
     /// Returns the number of items in this database. This is not cached.
-    pub fn count(&self) -> Result<u64, String> {
+    pub fn count(&self) -> GdbmResult<u64> {
         self.0.count()
     }
 
@@ -301,6 +330,7 @@ impl ReadOnlyDb {
     }
 }
 
+//TODO: move me into sys_gdbm
 impl<'a> From<&'a [u8]> for gdbm_sys::datum {
     fn from(src: &'a [u8]) -> gdbm_sys::datum {
         gdbm_sys::datum {
@@ -313,22 +343,10 @@ impl<'a> From<&'a [u8]> for gdbm_sys::datum {
 //TODO: use umask
 const DEFAULT_MODE: i32 = 0o666;
 
-fn get_error() -> String {
-    unsafe {
-        let err_loc = gdbm_sys::gdbm_errno_location();
-        let error_ptr = gdbm_sys::gdbm_strerror(*err_loc);
-        let err_string = CStr::from_ptr(error_ptr);
-        return err_string.to_string_lossy().into_owned();
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempdir::TempDir;
-    use std::thread::sleep;
-    use std::time::Duration;
-    use std::fs;
-    use std::path::PathBuf;
 
     fn create_db(path: &Path) -> Database {
         assert!(!path.exists());
@@ -362,11 +380,11 @@ mod tests {
         create_db(&db_path);
         assert!(db_path.exists());
 
-        let db = GdbmOpener::new()
+        let _ = GdbmOpener::new()
             .open_readonly(&db_path)
             .expect("db read failed");
 
-        let db2 = GdbmOpener::new()
+        let _ = GdbmOpener::new()
             .open_readonly(&db_path)
             .expect("db 2nd read failed");
     }
@@ -427,17 +445,17 @@ mod tests {
         let db_path = dir.path().join("count.db");
         let mut db = create_db(&db_path);
 
-        assert_eq!(db.count(), Ok(0));
+        assert_eq!(db.count().unwrap(), 0);
         for i in 0..5 {
             db.store(format!("key {}", i).as_bytes(), &format!("value {}", i))
                 .unwrap();
         }
-        assert_eq!(db.count(), Ok(5));
+        assert_eq!(db.count().unwrap(), 5);
         for i in 5..10 {
             db.store(format!("key {}", i).as_bytes(), &format!("value {}", i))
                 .unwrap();
         }
-        assert_eq!(db.count(), Ok(10));
+        assert_eq!(db.count().unwrap(), 10);
     }
 
     #[test]
@@ -496,11 +514,11 @@ mod tests {
         }
 
         {
-            let mut iter = db.iter();
+            let iter = db.iter();
             assert_eq!(5, iter.count());
         }
 
-        let mut iter = db.iter();
+        let iter = db.iter();
         let sum = iter.fold(0, |acc, (_,ent)| acc + ent.as_type::<i32>().unwrap());
         assert_eq!(sum, (0..5).sum());
     }

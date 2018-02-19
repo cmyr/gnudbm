@@ -33,7 +33,7 @@ include!(concat!(env!("OUT_DIR"), "/gdbm_bindings.rs"));
 mod test_bindings {
     use super::*;
     use tempdir::TempDir;
-    use std::ffi::{CString, OsStr};
+    use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
     #[test]
