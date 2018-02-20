@@ -1,10 +1,14 @@
 [package]
 name = "gnudbm"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Colin Rofls <colin@cmyr.net>"]
+description = "Ergonomic bindings for gdbm"
+categories = ["database", "external-ffi-bindings"]
+repository = "https://github.com/cmyr/gnudbm.git"
+license = "MIT"
 
 [dependencies]
-libc = "*"
+libc = "0.2"
 serde = "1.0"
 bincode = "1.0"
 
