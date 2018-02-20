@@ -29,8 +29,6 @@
 
 include!(concat!(env!("OUT_DIR"), "/gdbm_bindings.rs"));
 
-//TODO: impl drop for datum; requires some fiddling with bindgen
-
 impl<'a> From<&'a [u8]> for datum {
     fn from(src: &'a [u8]) -> datum {
         datum {

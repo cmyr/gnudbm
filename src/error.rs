@@ -66,14 +66,14 @@ pub type GdbmResult<T> = Result<T, Error>;
 
 impl GdbmError {
     /// Returns the last error reported by gdbm in the current thread.
-    pub fn from_last() -> Self {
+    pub (crate) fn from_last() -> Self {
         last_errno().into()
     }
 }
 
 impl Error {
     /// Returns the last error reported by gdbm in the current thread.
-    pub fn from_last() -> Self {
+    pub (crate) fn from_last() -> Self {
         last_errno().into()
     }
 }
