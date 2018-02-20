@@ -100,6 +100,8 @@ use std::path::Path;
 use std::slice;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
+use std::os::raw::c_void as os_c_void;
+use std::mem;
 
 use serde::{Deserialize, Serialize};
 
@@ -395,7 +397,98 @@ impl RwHandle {
         }
     }
 
-    //TODO: setopt (probably just one fn per option)
+    //TODO: this should actually be an option in GdbmOpener
+    /// Set the size of the internal bucket cache.
+    ///
+    /// # Note
+    ///
+    /// This option may only be set _once_ on each database handle. Subsequent
+    /// calls may fail silently.
+    pub fn set_cache_size(&mut self, size: usize) -> GdbmResult<()> {
+        self.set_opt(gdbm_sys::GDBM_SETCACHESIZE, size);
+        Ok(())
+    }
+
+    /// Returns the size of the internal bucket cache.
+    pub fn get_cache_size(&self) -> GdbmResult<usize> {
+        Ok(self.get_opt(gdbm_sys::GDBM_GETCACHESIZE))
+    }
+
+    /// Sets whether the database is in sync mode; if this is `true`,
+    /// changes to the database are written to disk as they occur.
+    pub fn set_sync_mode(&mut self, mode: bool) -> GdbmResult<()> {
+        let mode = if mode { 1i32 } else { 0 };
+        self.set_opt(gdbm_sys::GDBM_SETSYNCMODE, mode);
+        Ok(())
+    }
+
+    /// Returns `true` if the database is in sync mode.
+    pub fn get_sync_mode(&self) -> GdbmResult<bool> {
+        // a c bool
+        let r: i32 = self.get_opt(gdbm_sys::GDBM_GETSYNCMODE);
+        match r {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(Error::from_last()),
+        }
+    }
+
+    /// Sets the maximum size of a memory mapped region. This will be rounded
+    /// to the nearest page boundary.
+    ///
+    /// # Note
+    ///
+    /// By default, this is equal to `usize::max_value()`.
+    pub fn set_max_mmap_size(&mut self, size: usize) -> GdbmResult<()> {
+        self.set_opt(gdbm_sys::GDBM_SETMAXMAPSIZE, size);
+        Ok(())
+    }
+
+    /// Returns the current maximum size of a memory mapped region.
+    pub fn get_max_mmap_size(&self) -> GdbmResult<usize> {
+        Ok(self.get_opt(gdbm_sys::GDBM_GETMAXMAPSIZE))
+    }
+
+    /// Set whether or not the database should use memory mapping.
+    pub fn set_mmap_enabled(&mut self, mode: bool) -> GdbmResult<()> {
+        let mode = if mode { 1i32 } else { 0 };
+        self.set_opt(gdbm_sys::GDBM_SETMMAP, mode);
+        Ok(())
+    }
+
+    /// Returns whether or not the database should use memory mapping.
+    pub fn get_mmap_enabled(&self) -> GdbmResult<bool> {
+        let r: i32 = self.get_opt(gdbm_sys::GDBM_GETMMAP);
+        match r {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(Error::from_last()),
+        }
+    }
+
+    /// Returns the block size, in bytes. Block size is set when the database
+    /// is first created, and cannot be changed.
+    pub fn get_block_size(&self) -> GdbmResult<usize> {
+        Ok(self.get_opt(gdbm_sys::GDBM_GETBLOCKSIZE))
+    }
+
+    fn set_opt<T>(&self, opt: u32, value: T) {
+        let mut value = value;
+        let ptr = &mut value as *mut T;
+        let ptr = ptr as *mut os_c_void;
+        let size = mem::size_of::<T>() as i32;
+        unsafe { gdbm_sys::gdbm_setopt(self.handle, opt as i32, ptr, size) };
+    }
+
+    fn get_opt<T: Default>(&self, opt: u32) -> T {
+        let mut value = T::default();
+        let ptr = &mut value as *mut T;
+        let ptr = ptr as *mut os_c_void;
+        let size = mem::size_of::<T>() as i32;
+        unsafe { gdbm_sys::gdbm_setopt(self.handle, opt as i32, ptr, size) };
+        value
+    }
+
     //TODO: fdesc? do we want to expose the file descriptor for locking?
 
     /// returns a dummy database for use with doctests
@@ -518,7 +611,7 @@ impl GdbmOpener {
             flags |= gdbm_sys::GDBM_NOMMAP as i32
         }
 
-        eprintln!("opening with mode {}", flags);
+        eprintln!("opening with flags {}", flags);
         let handle =
             unsafe { gdbm_sys::gdbm_open(path_ptr, self.block_size, flags, DEFAULT_MODE, None) };
 
@@ -849,5 +942,72 @@ mod tests {
         db.remove("key 1".as_bytes()).unwrap();
         assert!(!db.contains_key("key 1".as_bytes()).unwrap());
         assert!(db.contains_key("key 2".as_bytes()).unwrap());
+    }
+
+    #[test]
+    fn set_cache_size() {
+        let dir = TempDir::new("rust_gdbm").unwrap();
+        let db_path = dir.path().join("cache_sizes.db");
+        let mut db = create_db(&db_path);
+
+        let initial = db.get_cache_size().unwrap();
+        db.set_cache_size(420);
+        let after = db.get_cache_size().unwrap();
+        assert_ne!(initial, after);
+
+        // subsequent should have no effect
+        let third = db.set_cache_size(182);
+        let again = db.get_cache_size().unwrap();
+        assert_eq!(again, 420);
+    }
+
+    #[test]
+    fn sync_opts() {
+        let dir = TempDir::new("rust_gdbm").unwrap();
+        let db_path = dir.path().join("sync_opt.db");
+        {
+            let mut db = create_db(&db_path);
+            // sync is off by default
+            assert_eq!(db.get_sync_mode().unwrap(), false);
+        }
+        let mut db = GdbmOpener::new()
+            .create_if_needed(true)
+            .sync(true)
+            .readwrite(&db_path)
+            .expect("create for sync opt failed");
+
+        assert_eq!(db.get_sync_mode().unwrap(), true);
+        db.set_sync_mode(false);
+        assert_eq!(db.get_sync_mode().unwrap(), false);
+        db.set_sync_mode(true);
+        assert_eq!(db.get_sync_mode().unwrap(), true);
+    }
+
+    #[test]
+    fn mmap_opts() {
+        let dir = TempDir::new("rust_gdbm").unwrap();
+        let db_path = dir.path().join("mmap_opt.db");
+        {
+            let mut db = create_db(&db_path);
+            // sync is off by default
+            assert_eq!(db.get_mmap_enabled().unwrap(), true);
+        }
+
+        let mut db = GdbmOpener::new()
+            .create_if_needed(true)
+            .no_mmap(true)
+            .readwrite(&db_path)
+            .expect("create for sync opt failed");
+
+        assert_eq!(db.get_mmap_enabled().unwrap(), false);
+        db.set_mmap_enabled(true);
+        assert_eq!(db.get_mmap_enabled().unwrap(), true);
+
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        db.set_max_mmap_size(page_size * 2);
+        assert_eq!(db.get_max_mmap_size().unwrap(), page_size * 2);
+
+        db.set_mmap_enabled(false);
+        assert_eq!(db.get_mmap_enabled().unwrap(), false);
     }
 }
