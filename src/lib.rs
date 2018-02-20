@@ -43,7 +43,9 @@
 //! let db_path = PathBuf::from("path/to/my.db");
 //! let mut db = GdbmOpener::new()
 //!     .create_if_needed(true)
-//!     .open(&db_path)
+//!     // there are two types of database handle;
+//!     // the other is instantiated with `GdbmOpener::readwrite`
+//!     .readwrite(&db_path)
 //!     .expect("db creation failed");
 //! ```
 //!
@@ -56,7 +58,7 @@
 //! # use gnudbm::*;
 //! use serde::{Serialize, Deserialize};
 //! # fn main() {
-//! # let mut db = Database::dummy();
+//! # let mut db = RwHandle::dummy();
 //!
 //! #[derive(Serialize, Deserialize)]
 //! struct MyStruct<'a> {
@@ -74,7 +76,7 @@
 //! db.store("my key".as_bytes(), &value).unwrap();
 //!
 //! let entry = db.fetch("my key".as_bytes()).unwrap();
-//! let fetched: MyStruct = entry.as_type().unwrap();
+//! let fetched: MyStruct = entry.deserialize().unwrap();
 //!
 //! assert_eq!(value.name, fetched.name);
 //! # }
@@ -107,18 +109,18 @@ pub use error::{Error, GdbmError, GdbmResult};
 //TODO: use umask
 const DEFAULT_MODE: i32 = 0o666;
 
-/// A read/write connection to a gdbm database.
+/// A read/write reference to a gdbm database.
 #[derive(Debug)]
-pub struct Database {
+pub struct RwHandle {
     handle: gdbm_sys::GDBM_FILE,
 }
 
-/// A readonly connection to a gdbm database.
+/// A readonly reference to a gdbm database.
 ///
-/// This type only exposes non-modifying methods, to avoid having to handle
+/// This type only exposes non-modifying methods, to avoid having to deal with
 /// errors around attempting to modify a database opened in read-only mode.
 #[derive(Debug)]
-pub struct ReadOnlyDb(Database);
+pub struct ReadHandle(RwHandle);
 
 /// A builder used to open gdbm files.
 #[derive(Debug, Default)]
@@ -143,7 +145,7 @@ pub struct Entry<'a> {
 
 /// A key retrieved from a gdbm database.
 ///
-/// This type is only used as the return value of `Database::iter`. It is
+/// This type is only used as the return value of `RwHandle::iter`. It is
 /// distinct from [`Entry`] for the sake of clarity.
 #[derive(Debug)]
 pub struct Key<'a>(Entry<'a>);
@@ -151,11 +153,11 @@ pub struct Key<'a>(Entry<'a>);
 /// An iterator over keys and values in a gdbm database.
 #[derive(Debug)]
 pub struct Iter<'a> {
-    db: &'a Database,
+    db: &'a RwHandle,
     nxt_key: Option<gdbm_sys::datum>,
 }
 
-impl Database {
+impl RwHandle {
     /// Inserts a key value pair into the database, replacing any existing
     /// value for that key.
     ///
@@ -166,7 +168,7 @@ impl Database {
     ///
     /// ```no_run
     /// # use gnudbm::*;
-    /// # let mut db = Database::dummy();
+    /// # let mut db = RwHandle::dummy();
     /// let key = "my key";
     /// let value = "my value";
     /// db.store(key.as_bytes(), value).unwrap();
@@ -190,15 +192,15 @@ impl Database {
     ///
     /// ```no_run
     /// # use gnudbm::*;
-    /// # let mut db = Database::dummy();
+    /// # let mut db = RwHandle::dummy();
     /// let key = "my key";
     /// let value = "my value";
-    /// db.store_safe(key.as_bytes(), value).unwrap();
+    /// db.store_checked(key.as_bytes(), value).unwrap();
     ///
     /// // second store will fail
-    /// assert!(db.store_safe(key.as_bytes(), value).is_err());
+    /// assert!(db.store_checked(key.as_bytes(), value).is_err());
     /// ```
-    pub fn store_safe<T>(&mut self, key: &[u8], value: &T) -> GdbmResult<()>
+    pub fn store_checked<T>(&mut self, key: &[u8], value: &T) -> GdbmResult<()>
     where
         T: ?Sized + Serialize,
     {
@@ -248,13 +250,13 @@ impl Database {
     ///
     /// ```no_run
     /// # use gnudbm::*;
-    /// # let mut db = Database::dummy();
+    /// # let mut db = RwHandle::dummy();
     /// let key = "my key";
     /// let value = "my value";
     /// db.store(key.as_bytes(), &value).unwrap();
     ///
     /// let entry = db.fetch(key.as_bytes()).unwrap();
-    /// let as_str: &str = entry.as_type().unwrap();
+    /// let as_str: &str = entry.deserialize().unwrap();
     ///
     /// assert_eq!(as_str, value);
     /// ```
@@ -294,7 +296,7 @@ impl Database {
     ///
     /// ```no_run
     /// # use gnudbm::*;
-    /// # let mut db = Database::dummy();
+    /// # let mut db = RwHandle::dummy();
     /// for i in 0..100 {
     ///     let key = format!("key {}", i);
     ///     let value = format!("value {}", i);
@@ -324,7 +326,7 @@ impl Database {
     ///
     /// ```no_run
     /// # use gnudbm::*;
-    /// # let mut db = Database::dummy();
+    /// # let mut db = RwHandle::dummy();
     /// assert_eq!(db.count().unwrap(), db.iter().count());
     /// ```
     pub fn iter<'a>(&'a self) -> Iter<'a> {
@@ -342,10 +344,10 @@ impl Database {
     ///
     /// ```no_run
     /// # use gnudbm::*;
-    /// # let mut db = Database::dummy();
+    /// # let mut db = RwHandle::dummy();
     /// let key = "my key";
     /// let value = "my value";
-    /// db.store_safe(key.as_bytes(), &value).unwrap();
+    /// db.store_checked(key.as_bytes(), &value).unwrap();
     ///
     /// assert!(db.contains_key(key.as_bytes()).unwrap());
     /// assert!(!db.contains_key("missing key".as_bytes()).unwrap());
@@ -367,7 +369,7 @@ impl Database {
     }
 
     /// Synchronizes the changes in the database with the file on disk.
-    pub fn flush(&self) {
+    pub fn sync(&self) {
         //TODO: this should be failable, but docs don't show how we get the error :|
         unsafe { gdbm_sys::gdbm_sync(self.handle) }
     }
@@ -399,24 +401,24 @@ impl Database {
     /// returns a dummy database for use with doctests
     #[allow(dead_code)]
     #[doc(hidden)]
-    pub fn dummy() -> Database {
+    pub fn dummy() -> RwHandle {
         use std::ptr;
-        Database { handle: ptr::null_mut() }
+        RwHandle { handle: ptr::null_mut() }
     }
 }
 
 #[doc(hidden)]
-impl Drop for Database {
+impl Drop for RwHandle {
     fn drop(&mut self) {
         unsafe { gdbm_sys::gdbm_close(self.handle) }
     }
 }
 
-impl ReadOnlyDb {
-    /// Attempts to fetch an item from the database. See [`Database::fetch`]
+impl ReadHandle {
+    /// Attempts to fetch an item from the database. See [`RwHandle::fetch`]
     /// for more information.
     ///
-    /// [`Database::fetch`]: struct.Database.html#method.fetch
+    /// [`RwHandle::fetch`]: struct.Database.html#method.fetch
     pub fn fetch(&self, key: &[u8]) -> GdbmResult<Entry> {
         self.0.fetch(key)
     }
@@ -427,9 +429,9 @@ impl ReadOnlyDb {
     }
 
     /// Returns an iterator over the keys and values in this database.
-    /// See [`Database::iter`] for more information.
+    /// See [`RwHandle::iter`] for more information.
     ///
-    /// [`Database::iter`]: struct.Database.html#method.iter
+    /// [`RwHandle::iter`]: struct.Database.html#method.iter
     pub fn iter<'a>(&'a self) -> Iter<'a> {
         self.0.iter()
     }
@@ -476,21 +478,21 @@ impl GdbmOpener {
     }
 
     /// Attempts to open the file at `path` with the options provided,
-    /// returning a read/write database.
-    pub fn open<P: AsRef<Path>>(&self, path: P) -> GdbmResult<Database> {
+    /// returning a read/write database handle.
+    pub fn readwrite<P: AsRef<Path>>(&self, path: P) -> GdbmResult<RwHandle> {
         let path = path.as_ref();
         let handle = self.gdbm_open(&path)?;
-        Ok(Database { handle })
+        Ok(RwHandle { handle })
     }
 
     /// Attempts to open the file at `path` with the options provided,
-    /// returning a read-only database.
+    /// returning a read-only database handle.
     ///
     /// This ignores any settings applied by `create_if_needed` or `overwrite`.
-    pub fn open_readonly<P: AsRef<Path>>(&mut self, path: P) -> GdbmResult<ReadOnlyDb> {
+    pub fn readonly<P: AsRef<Path>>(&mut self, path: P) -> GdbmResult<ReadHandle> {
         self.readonly = true;
-        let db = self.open(path)?;
-        Ok(ReadOnlyDb(db))
+        let db = self.readwrite(path)?;
+        Ok(ReadHandle(db))
     }
 
     fn gdbm_open(&self, path: &Path) -> GdbmResult<gdbm_sys::GDBM_FILE> {
@@ -543,7 +545,7 @@ impl<'a> Entry<'a> {
     ///
     /// ```no_run
     /// # use gnudbm::*;
-    /// # let mut db = Database::dummy();
+    /// # let mut db = RwHandle::dummy();
     /// let key = "my key";
     /// let value = "my value";
     /// db.store(key.as_bytes(), &value).unwrap();
@@ -566,7 +568,7 @@ impl<'a> Entry<'a> {
     /// ```no_run
     /// # use gnudbm::*;
     /// # use std::collections::BTreeMap;
-    /// # let mut db = Database::dummy();
+    /// # let mut db = RwHandle::dummy();
     /// let key = "my key";
     ///
     /// // BTreeMap implements `Serialize` so we can insert it and parse from an entry.
@@ -576,12 +578,12 @@ impl<'a> Entry<'a> {
     /// db.store(key.as_bytes(), &value).unwrap();
     ///
     /// let entry = db.fetch(key.as_bytes()).unwrap();
-    /// let as_map: BTreeMap<&str, i32> = entry.as_type().unwrap();
+    /// let as_map: BTreeMap<&str, i32> = entry.deserialize().unwrap();
     ///
     /// assert_eq!(as_map.get("hi"), Some(&5));
     ///
     /// ```
-    pub fn as_type<'de, T>(&'de self) -> Result<T, bincode::Error>
+    pub fn deserialize<'de, T>(&'de self) -> Result<T, bincode::Error>
     where
         T: Deserialize<'de>,
     {
@@ -607,7 +609,7 @@ impl<'a> Key<'a> {
 }
 
 impl<'a> Iter<'a> {
-    fn new(db: &'a Database) -> Self {
+    fn new(db: &'a RwHandle) -> Self {
         let firstkey = unsafe { gdbm_sys::gdbm_firstkey(db.handle) };
         let nxt_key = if firstkey.dptr.is_null() {
             None
@@ -660,11 +662,11 @@ mod tests {
     use super::*;
     use tempdir::TempDir;
 
-    fn create_db(path: &Path) -> Database {
+    fn create_db(path: &Path) -> RwHandle {
         assert!(!path.exists());
         let db = GdbmOpener::new()
             .create_if_needed(true)
-            .open(&path)
+            .readwrite(&path)
             .expect("db creation failed");
         assert!(path.exists());
         db
@@ -680,7 +682,7 @@ mod tests {
         db.store("my key".as_bytes(), "my value").unwrap();
         {
             let entry = db.fetch("my key".as_bytes()).unwrap();
-            let s: &str = entry.as_type().unwrap();
+            let s: &str = entry.deserialize().unwrap();
             assert_eq!(s, "my value");
         }
     }
@@ -693,11 +695,11 @@ mod tests {
         assert!(db_path.exists());
 
         let _ = GdbmOpener::new()
-            .open_readonly(&db_path)
+            .readonly(&db_path)
             .expect("db read failed");
 
         let _ = GdbmOpener::new()
-            .open_readonly(&db_path)
+            .readonly(&db_path)
             .expect("db 2nd read failed");
     }
 
@@ -710,7 +712,7 @@ mod tests {
         {
             let mut db = GdbmOpener::new()
                 .create_if_needed(true)
-                .open(&db_path)
+                .readwrite(&db_path)
                 .expect("db creation failed");
             db.store("read key".as_bytes(), "read value").unwrap();
             assert!(db_path.exists());
@@ -718,24 +720,24 @@ mod tests {
         {
             assert!(db_path.exists());
             let db = GdbmOpener::new()
-                .open_readonly(&db_path)
+                .readonly(&db_path)
                 .expect("db open failed");
 
             {
                 let entry = db.fetch("read key".as_bytes()).unwrap();
-                let s: String = entry.as_type().unwrap();
+                let s: String = entry.deserialize().unwrap();
                 assert_eq!(s, "read value");
             }
         }
         {
             let mut db = GdbmOpener::new()
-                .open(&db_path)
+                .readwrite(&db_path)
                 .expect("db open for write failed");
 
             db.store("write key".as_bytes(), "write value").unwrap();
             {
                 let entry = db.fetch("write key".as_bytes()).unwrap();
-                let s: String = entry.as_type().unwrap();
+                let s: String = entry.deserialize().unwrap();
                 assert_eq!(s, "write value");
             }
         }
@@ -743,7 +745,7 @@ mod tests {
         // ::New should overwrite the database
         let db = GdbmOpener::new()
             .overwrite(true)
-            .open(&db_path)
+            .readwrite(&db_path)
             .expect("db new failed");
 
         let r = db.fetch("write key".as_bytes());
@@ -778,7 +780,7 @@ mod tests {
         db.store("an int".as_bytes(), &6usize).unwrap();
         {
             let entry = db.fetch("an int".as_bytes()).unwrap();
-            let s: usize = entry.as_type().unwrap();
+            let s: usize = entry.deserialize().unwrap();
             assert_eq!(6, s);
         }
 
@@ -786,7 +788,7 @@ mod tests {
         db.store("a vec".as_bytes(), &v).unwrap();
         {
             let entry = db.fetch("a vec".as_bytes()).unwrap();
-            let s: Vec<i32> = entry.as_type().unwrap();
+            let s: Vec<i32> = entry.deserialize().unwrap();
             assert_eq!(s, v);
         }
 
@@ -806,7 +808,7 @@ mod tests {
 
         db.store("a struct".as_bytes(), &s).unwrap();
         let entry = db.fetch("a struct".as_bytes()).unwrap();
-        let r: MyStruct = entry.as_type().unwrap();
+        let r: MyStruct = entry.deserialize().unwrap();
         assert_eq!(r, s);
     }
 
@@ -827,7 +829,7 @@ mod tests {
         }
 
         let iter = db.iter();
-        let sum = iter.fold(0, |acc, (_, ent)| acc + ent.as_type::<i32>().unwrap());
+        let sum = iter.fold(0, |acc, (_, ent)| acc + ent.deserialize::<i32>().unwrap());
         assert_eq!(sum, (0..5).sum());
     }
 

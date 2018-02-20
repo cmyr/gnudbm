@@ -78,6 +78,7 @@ impl Error {
     }
 }
 
+#[doc(hidden)]
 impl fmt::Display for GdbmError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
@@ -93,6 +94,7 @@ impl fmt::Display for GdbmError {
     }
 }
 
+#[doc(hidden)]
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
@@ -105,6 +107,7 @@ impl fmt::Display for Error {
     }
 }
 
+#[doc(hidden)]
 impl From<u32> for Error {
     fn from(src: u32) -> Error {
         match src {
@@ -114,6 +117,7 @@ impl From<u32> for Error {
     }
 }
 
+#[doc(hidden)]
 impl From<u32> for GdbmError {
     fn from(src: u32) -> GdbmError {
         match src {
@@ -124,24 +128,28 @@ impl From<u32> for GdbmError {
     }
 }
 
+#[doc(hidden)]
 impl From<NulError> for Error {
     fn from(_src: NulError) -> Error {
         Error::InvalidPath
     }
 }
 
+#[doc(hidden)]
 impl From<GdbmError> for Error {
     fn from(src: GdbmError) -> Error {
         Error::Internal(src)
     }
 }
 
+#[doc(hidden)]
 impl From<BincodeError> for Error {
     fn from(src: BincodeError) -> Error {
         Error::Bincode(src)
     }
 }
 
+#[doc(hidden)]
 pub fn last_errno() -> u32 {
     unsafe {
         let err_loc = gdbm_sys::gdbm_errno_location();
