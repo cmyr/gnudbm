@@ -945,6 +945,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unused_must_use)]
     fn set_cache_size() {
         let dir = TempDir::new("rust_gdbm").unwrap();
         let db_path = dir.path().join("cache_sizes.db");
@@ -956,17 +957,18 @@ mod tests {
         assert_ne!(initial, after);
 
         // subsequent should have no effect
-        let third = db.set_cache_size(182);
+        db.set_cache_size(182);
         let again = db.get_cache_size().unwrap();
         assert_eq!(again, 420);
     }
 
     #[test]
+    #[allow(unused_must_use)]
     fn sync_opts() {
         let dir = TempDir::new("rust_gdbm").unwrap();
         let db_path = dir.path().join("sync_opt.db");
         {
-            let mut db = create_db(&db_path);
+            let db = create_db(&db_path);
             // sync is off by default
             assert_eq!(db.get_sync_mode().unwrap(), false);
         }
@@ -984,11 +986,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(unused_must_use)]
     fn mmap_opts() {
         let dir = TempDir::new("rust_gdbm").unwrap();
         let db_path = dir.path().join("mmap_opt.db");
         {
-            let mut db = create_db(&db_path);
+            let db = create_db(&db_path);
             // sync is off by default
             assert_eq!(db.get_mmap_enabled().unwrap(), true);
         }
