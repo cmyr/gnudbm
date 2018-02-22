@@ -1,6 +1,8 @@
 # gnudbm
 
-This project provides ergonomic and idiomatic Rust bindings to [gdbm], a lightweight local key/value database.
+This project provides ergonomic and idiomatic Rust bindings to [gdbm],
+a lightweight local key/value database. It allows easy storage and retrieval
+of any type that implements `Serialize` and `Deserialize`.
 
 ## Requirements
 

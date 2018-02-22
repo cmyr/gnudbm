@@ -49,7 +49,27 @@
 //!     .expect("db creation failed");
 //! ```
 //!
-//! Use with Serde:
+//! When fetching and storing, your key can be any type that implements
+//! `AsRef<[u8]>`; for instance one of `String`/`&str`.
+//! Values are any type that implements `Serialize` and `Deserialize`.
+//!
+//! ```no_run
+//! # use gnudbm::*;
+//! # let mut db = RwHandle::dummy();
+//! // 'db' is a previously configured database
+//! db.store("my key", "an important value").unwrap();
+//!
+//! // fetch returns an Entry, which wraps a pointer to the raw data
+//! let entry = db.fetch("my key").unwrap();
+//! assert_eq!(entry.as_bytes(), "my key".as_bytes());
+//!
+//! // the data can be deserialized, borrowing if possible.
+//! // The result is bound to the lifetime of the Entry.
+//! let as_str: &str = entry.deserialize().unwrap();
+//! assert_eq!(as_str, "my key");
+//! ```
+//!
+//! Use a custom type with Serde:
 //!
 //! ```no_run
 //! # #[macro_use] extern crate serde_derive;
@@ -73,9 +93,9 @@
 //! };
 //!
 //! // 'db' is a previously configured database
-//! db.store("my key".as_bytes(), &value).unwrap();
+//! db.store("my key", &value).unwrap();
 //!
-//! let entry = db.fetch("my key".as_bytes()).unwrap();
+//! let entry = db.fetch("my key").unwrap();
 //! let fetched: MyStruct = entry.deserialize().unwrap();
 //!
 //! assert_eq!(value.name, fetched.name);
@@ -173,11 +193,12 @@ impl RwHandle {
     /// # let mut db = RwHandle::dummy();
     /// let key = "my key";
     /// let value = "my value";
-    /// db.store(key.as_bytes(), value).unwrap();
+    /// db.store(key, value).unwrap();
     /// ```
-    pub fn store<T>(&mut self, key: &[u8], value: &T) -> GdbmResult<()>
+    pub fn store<K, V>(&mut self, key: K, value: &V) -> GdbmResult<()>
     where
-        T: ?Sized + Serialize,
+        K: AsRef<[u8]>,
+        V: ?Sized + Serialize,
     {
         self.store_impl(key, value, true).map(|_| ())
     }
@@ -197,14 +218,15 @@ impl RwHandle {
     /// # let mut db = RwHandle::dummy();
     /// let key = "my key";
     /// let value = "my value";
-    /// db.store_checked(key.as_bytes(), value).unwrap();
+    /// db.store_checked(key, value).unwrap();
     ///
     /// // second store will fail
-    /// assert!(db.store_checked(key.as_bytes(), value).is_err());
+    /// assert!(db.store_checked(key, value).is_err());
     /// ```
-    pub fn store_checked<T>(&mut self, key: &[u8], value: &T) -> GdbmResult<()>
+    pub fn store_checked<K, V>(&mut self, key: K, value: &V) -> GdbmResult<()>
     where
-        T: ?Sized + Serialize,
+        K: AsRef<[u8]>,
+        V: ?Sized + Serialize,
     {
         let r = self.store_impl(key, value, false)?;
         if r == 1 {
@@ -214,12 +236,13 @@ impl RwHandle {
         }
     }
 
-    fn store_impl<T>(&mut self, key: &[u8], value: &T, replace: bool) -> GdbmResult<i32>
+    fn store_impl<K, V>(&mut self, key: K, value: &V, replace: bool) -> GdbmResult<i32>
     where
-        T: ?Sized + Serialize,
+        K: AsRef<[u8]>,
+        V: ?Sized + Serialize,
     {
         let bytes = bincode::serialize(value)?;
-        let key_d: gdbm_sys::datum = key.into();
+        let key_d: gdbm_sys::datum = key.as_ref().into();
 
         let value_d = gdbm_sys::datum {
             dptr: bytes.as_ptr() as *mut i8,
@@ -262,8 +285,10 @@ impl RwHandle {
     ///
     /// assert_eq!(as_str, value);
     /// ```
-    pub fn fetch(&self, key: &[u8]) -> GdbmResult<Entry> {
-        let key_d = key.into();
+    pub fn fetch<K>(&self, key: K) -> GdbmResult<Entry>
+        where K: AsRef<[u8]>,
+    {
+        let key_d = key.as_ref().into();
         let result = unsafe { gdbm_sys::gdbm_fetch(self.handle, key_d) };
 
         if result.dptr.is_null() {
@@ -512,7 +537,9 @@ impl ReadHandle {
     /// for more information.
     ///
     /// [`RwHandle::fetch`]: struct.Database.html#method.fetch
-    pub fn fetch(&self, key: &[u8]) -> GdbmResult<Entry> {
+    pub fn fetch<K>(&self, key: K) -> GdbmResult<Entry>
+        where K: AsRef<[u8]>,
+    {
         self.0.fetch(key)
     }
 
