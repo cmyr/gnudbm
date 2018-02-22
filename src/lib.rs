@@ -28,14 +28,12 @@
 //! With built in support for [Serde] and [bincode], It provides fast and easy
 //! local key/value storage of any type implementing [`Serialize`].
 //!
-//! [gdbm]: http://puszcza.gnu.org.ua/software/gdbm/
-//! [serde]: https://serde.rs
-//! [bincode]: https://github.com/TyOverby/bincode
-//! [`Serialize`]: https://serde.rs/impl-serialize.html
+//! For an overview of available database operations, see the documentation for
+//! [`RwHandle`].
 //!
 //! # Examples
 //!
-//! Creating a new database:
+//! Opening or creating a database file with a [`GdbmOpener`]:
 //!
 //! ```no_run
 //! # use std::path::PathBuf;
@@ -101,6 +99,14 @@
 //! assert_eq!(value.name, fetched.name);
 //! # }
 //! ```
+//!
+//! [gdbm]: http://puszcza.gnu.org.ua/software/gdbm/
+//! [serde]: https://serde.rs
+//! [bincode]: https://github.com/TyOverby/bincode
+//! [`Serialize`]: https://serde.rs/impl-serialize.html
+//! [`RwHandle`]: struct.RwHandle.html
+//! [`GdbmOpener`]: struct.GdbmOpener.html
+//!
 
 extern crate bincode;
 extern crate libc;
@@ -315,7 +321,7 @@ impl RwHandle {
 
     /// Counts the number of items in this database. This is not cached.
     ///
-    /// Returns the total number of items in the database as a u64, or
+    /// Returns the total number of items in the database, or
     /// an [`Error`] if there was a problem reading the database.
     ///
     /// [`Error`]: error/enum.Error.html
