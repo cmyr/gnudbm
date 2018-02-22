@@ -42,9 +42,9 @@
 //! # use gnudbm::*;
 //! let db_path = PathBuf::from("path/to/my.db");
 //! let mut db = GdbmOpener::new()
-//!     .create_if_needed(true)
+//!     .create(true)
 //!     // there are two types of database handle;
-//!     // the other is instantiated with `GdbmOpener::readwrite`
+//!     // the other is instantiated with `GdbmOpener::readonly`
 //!     .readwrite(&db_path)
 //!     .expect("db creation failed");
 //! ```
@@ -539,12 +539,12 @@ impl GdbmOpener {
     /// Sets the option to create the file if it does not exist.
     ///
     /// This corresponds to gdbm's `GDBM_WRCREAT` flag.
-    pub fn create_if_needed(&mut self, create: bool) -> &mut Self {
+    pub fn create(&mut self, create: bool) -> &mut Self {
         self.create = create;
         self
     }
 
-    /// Sets the option to overwrite any existing file. Implies `create_if_needed`.
+    /// Sets the option to overwrite any existing file. Implies `create`.
     ///
     /// This corresponds to gdbm's `GDBM_NEWDB` flag.
     pub fn overwrite(&mut self, overwrite: bool) -> &mut Self {
@@ -581,7 +581,7 @@ impl GdbmOpener {
     /// Attempts to open the file at `path` with the options provided,
     /// returning a read-only database handle.
     ///
-    /// This ignores any settings applied by `create_if_needed` or `overwrite`.
+    /// This ignores any settings applied by `create` or `overwrite`.
     pub fn readonly<P: AsRef<Path>>(&mut self, path: P) -> GdbmResult<ReadHandle> {
         self.readonly = true;
         let db = self.readwrite(path)?;
@@ -758,7 +758,7 @@ mod tests {
     fn create_db(path: &Path) -> RwHandle {
         assert!(!path.exists());
         let db = GdbmOpener::new()
-            .create_if_needed(true)
+            .create(true)
             .readwrite(&path)
             .expect("db creation failed");
         assert!(path.exists());
@@ -804,7 +804,7 @@ mod tests {
 
         {
             let mut db = GdbmOpener::new()
-                .create_if_needed(true)
+                .create(true)
                 .readwrite(&db_path)
                 .expect("db creation failed");
             db.store("read key".as_bytes(), "read value").unwrap();
@@ -973,7 +973,7 @@ mod tests {
             assert_eq!(db.get_sync_mode().unwrap(), false);
         }
         let mut db = GdbmOpener::new()
-            .create_if_needed(true)
+            .create(true)
             .sync(true)
             .readwrite(&db_path)
             .expect("create for sync opt failed");
@@ -997,7 +997,7 @@ mod tests {
         }
 
         let mut db = GdbmOpener::new()
-            .create_if_needed(true)
+            .create(true)
             .no_mmap(true)
             .readwrite(&db_path)
             .expect("create for sync opt failed");
