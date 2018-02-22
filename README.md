@@ -6,10 +6,9 @@ of any type that implements `Serialize` and `Deserialize`.
 
 ## Requirements
 
-- Building uses [bindgen]; see the [bindgen requirements].
-- gdbm 1.14. On macOS this is available with `brew
-install gdbm`; on other platforms you may need to build [from source].
-
+By default, this package includes a recent gdbm and builds it as a static lib.
+If you would like to link against the system gdbm, ensure it is up to date
+(1.14+) and build with the `system-gdbm` feature.
 
 ## Usage
 
@@ -17,7 +16,7 @@ First, add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-gnudbm = "0.1.0"
+gnudbm = "0.2.0"
 ```
 
 And to your crate root:

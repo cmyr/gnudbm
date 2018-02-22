@@ -7,6 +7,9 @@ categories = ["database", "external-ffi-bindings"]
 repository = "https://github.com/cmyr/gnudbm.git"
 license = "MIT"
 
+[features]
+system-gdbm = []
+
 [dependencies]
 libc = "0.2"
 serde = "1.0"

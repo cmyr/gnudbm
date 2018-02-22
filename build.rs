@@ -22,6 +22,62 @@
 // IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+#[cfg(not(feature = "system-gdbm"))]
+const GDBM_VERSION: &str = "1.14.1";
+
 fn main() {
-    println!("cargo:rustc-link-lib=gdbm");
+    #[cfg(not(feature = "system-gdbm"))]
+    {
+        use std::path::PathBuf;
+        use std::process::Command;
+        use std::fs;
+        use std::env;
+
+        let crate_root = PathBuf::from(&env::var("CARGO_MANIFEST_DIR").unwrap());
+        let out_dir = PathBuf::from(&env::var("OUT_DIR").unwrap());
+        let dest = out_dir.join("build");
+        if !dest.exists() {
+            fs::create_dir(&dest).unwrap();
+        }
+
+        let src_dir = crate_root.join("vendor").join(format!("gdbm-{}", GDBM_VERSION));
+        //let dest_file = dest.join("libgdbm.a");
+        if !dest.join("lib").exists() {
+            eprintln!("building gdbm, dest = {}", dest.display());
+            assert!(
+                Command::new("./configure")
+                .arg("--without-readline")
+                .arg(&format!("--prefix={}", dest.display()))
+                .current_dir(&src_dir)
+                .output()
+                .unwrap()
+                .status.success()
+                );
+
+            assert!(
+                Command::new("make")
+                .current_dir(&src_dir)
+                .output()
+                .unwrap()
+                .status.success()
+                );
+
+            assert!(
+                Command::new("make")
+                .arg("install")
+                .current_dir(&src_dir)
+                .output()
+                .unwrap()
+                .status.success()
+                );
+
+        }
+        println!("cargo:rustc-link-lib=static=gdbm");
+        println!("cargo:rustc-flags=-L {}", dest.join("lib").display());
+    }
+
+    #[cfg(feature = "system-gdbm")]
+    {
+        println!("cargo:rustc-link-lib=gdbm");
+    }
 }
