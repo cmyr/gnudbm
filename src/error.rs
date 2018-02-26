@@ -76,6 +76,14 @@ impl Error {
     pub (crate) fn from_last() -> Self {
         last_errno().into()
     }
+
+    /// Returns `true` iff `self` is the `NoRecord` enum member.
+    pub fn is_no_record(&self) -> bool {
+        match *self {
+            Error::NoRecord => true,
+            _ => false
+        }
+    }
 }
 
 #[doc(hidden)]

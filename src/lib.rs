@@ -304,18 +304,23 @@ impl RwHandle {
         }
     }
 
-    /// Removes an entry from the database.
-    ///
-    /// Returns an [`Error`] if there is a problem with the database file.
+    /// Removes an entry from the database. Returns `true` if an entry was
+    /// removed, and `false` if no entry was present. Returns an [`Error`]
+    /// if there is a problem with the database file.
     ///
     /// [`Error`]: error/enum.Error.html
-    pub fn remove(&self, key: &[u8]) -> GdbmResult<()> {
-        let key_d = key.into();
+    pub fn remove<K>(&self, key: K) -> GdbmResult<bool>
+        where K: AsRef<[u8]>,
+    {
+        let key_d = key.as_ref().into();
         let result = unsafe { gdbm_sys::gdbm_delete(self.handle, key_d) };
         if result != 0 {
-            Err(GdbmError::from_last().into())
+            match Error::from_last() {
+                ref e if e.is_no_record() => Ok(false),
+                e => Err(e)
+            }
         } else {
-            Ok(())
+            Ok(true)
         }
     }
 
@@ -1045,5 +1050,15 @@ mod tests {
 
         db.set_mmap_enabled(false);
         assert_eq!(db.get_mmap_enabled().unwrap(), false);
+    }
+
+    #[test]
+    fn deletion() {
+        let dir = TempDir::new("rust_gdbm").unwrap();
+        let db_path = dir.path().join("delete.db");
+        let mut db = create_db(&db_path);
+        db.store("key", "value").unwrap();
+        assert!(db.remove("key").unwrap());
+        assert!(!db.remove("non-key").unwrap());
     }
 }

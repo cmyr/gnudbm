@@ -1,5 +1,7 @@
 # gnudbm
 
+See the [documentation] for details.
+
 This project provides ergonomic and idiomatic Rust bindings to [gdbm],
 a lightweight local key/value database. It allows easy storage and retrieval
 of any type that implements `Serialize` and `Deserialize`.
@@ -16,7 +18,7 @@ First, add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-gnudbm = "0.2.0"
+gnudbm = "0.2.3"
 ```
 
 And to your crate root:
@@ -25,10 +27,8 @@ And to your crate root:
 extern crate gnudbm;
 ```
 
-See the [API documentation] for details.
-
 [gdbm]: http://puszcza.gnu.org.ua/software/gdbm
 [from source]: https://www.gnu.org.ua/software/gdbm/download.html
 [bindgen]: https://github.com/rust-lang-nursery/rust-bindgen
 [bindgen requirements]: https://rust-lang-nursery.github.io/rust-bindgen/requirements.html
-[API documentation]: https://docs.rs/crate/gnudbm/
+[documentation]: https://docs.rs/crate/gnudbm/
