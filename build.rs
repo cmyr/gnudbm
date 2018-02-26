@@ -41,7 +41,6 @@ fn main() {
         }
 
         let src_dir = crate_root.join("vendor").join(format!("gdbm-{}", GDBM_VERSION));
-        //let dest_file = dest.join("libgdbm.a");
         if !dest.join("lib").exists() {
             eprintln!("building gdbm, dest = {}", dest.display());
             assert!(
@@ -70,6 +69,12 @@ fn main() {
                 .unwrap()
                 .status.success()
                 );
+
+            // so we don't dirty our source dir
+            let _ = Command::new("make")
+                .arg("distclean")
+                .current_dir(&src_dir)
+                .output();
 
         }
         println!("cargo:rustc-link-lib=static=gdbm");
