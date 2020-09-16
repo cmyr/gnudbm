@@ -44,7 +44,7 @@ fn main() {
         if !dest.join("lib").exists() {
             eprintln!("building gdbm, dest = {}", dest.display());
             assert!(
-                Command::new("./configure")
+                Command::new(src_dir.join("configure"))
                 .arg("--without-readline")
                 .arg(&format!("--prefix={}", dest.display()))
                 .current_dir(&src_dir)
