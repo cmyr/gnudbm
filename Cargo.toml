@@ -1,6 +1,6 @@
 [package]
 name = "gnudbm"
-version = "0.2.3"
+version = "0.2.4"
 authors = ["Colin Rofls <colin@cmyr.net>"]
 description = "Ergonomic bindings for gdbm"
 categories = ["database", "external-ffi-bindings"]
