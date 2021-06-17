@@ -115,6 +115,8 @@ impl fmt::Display for Error {
     }
 }
 
+impl std::error::Error for Error {}
+
 #[doc(hidden)]
 impl From<u32> for Error {
     fn from(src: u32) -> Error {
